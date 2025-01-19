@@ -1,57 +1,47 @@
-local uv = vim.uv
-
 local fzf_lua_config = require("fzf-lua.config")
 
-local Core = require("fzf-lua-jumplist.core")
 local Config = require("fzf-lua-jumplist.config")
 
-local _storage = nil
-
 local M = {}
+
+M.line_pattern = "^(%d+):(%d+)%s(.+)$"
 
 ---@param opts FzfLuaJumpConfig
 ---@return FzfLuaStorage entries
 local function get_jumplist(opts)
     local jumplist = vim.fn.getjumplist()[1]
-    -- Core.reverse(jumplist)
 
     local current_buffer = vim.fn.winbufnr(vim.fn.win_getid())
 
     local entries = {} ---@type FzfLuaStorage
 
-    for _, v in ipairs(jumplist) do
-        if current_buffer == v.bufnr then
-            local text = vim.api.nvim_buf_get_lines(v.bufnr, v.lnum - 1, v.lnum, false)[1]
-            if text then
-                text = string.format("%s: %s", v.lnum, text)
-                entries[text] = v
+    for _, jump in ipairs(jumplist) do
+        if current_buffer == jump.bufnr then
+            local line = vim.api.nvim_buf_get_lines(jump.bufnr, jump.lnum - 1, jump.lnum, false)[1]
+            if line then
+                line = string.format("%s:%-4s %s", jump.lnum, jump.col + 1, line)
+                table.insert(entries, 1, line)
             end
         end
     end
 
-    entries = Core.filter(entries, opts)
+    entries = require("fzf-lua-jumplist.core").filter(entries, opts)
 
     return entries
 end
 
 ---@param selected string The key of FzfLuaStorage
 function M.goto_jump(selected)
-    local value
-    for key, v in pairs(_storage) do
-        if key == selected[1] then
-            value = v
-        end
-    end
+    local lnum, col, _ = selected[1]:match(M.line_pattern)
+    col = (not Config.options.start_of_line and col) or 1
 
-    local col = (Config.options.start_of_line and value.col) or 1
-    vim.api.nvim_win_set_cursor(0, { value.lnum, col })
+    vim.api.nvim_win_set_cursor(0, { tonumber(lnum), tonumber(col) - 1 })
 end
 
 function M.previewer()
     local previewer = require("fzf-lua.previewer.builtin")
 
     local Previewer = previewer.buffer_or_file:extend()
-
     function Previewer:new(o, opts, fzf_win)
         Previewer.super.new(self, o, opts, fzf_win)
         return self
@@ -62,18 +52,12 @@ function M.previewer()
             return {}
         end
 
-        local value
-        for key, v in pairs(_storage) do
-            if key == entry_str then
-                value = v
-            end
-        end
-
+        local lnum, col, _ = entry_str:match(M.line_pattern)
         return {
-            bufnr = value.bufnr,
-            path = uv.cwd(),
-            line = value.lnum or 1,
-            col = (Config.options.start_of_line and value.col) or 1,
+            bufnr = self.win.src_bufnr,
+            path = vim.api.nvim_buf_get_name(self.win.src_bufnr),
+            line = tonumber(lnum) or 1,
+            col = (not Config.options.start_of_line and col) or 1,
         }
     end
 
@@ -81,12 +65,7 @@ function M.previewer()
 end
 
 function M.jumplist(fzf_opts)
-    _storage = get_jumplist(Config.options)
-
-    local text = {}
-    for key, _ in pairs(_storage) do
-        table.insert(text, key)
-    end
+    local entries = get_jumplist(Config.options)
 
     fzf_opts = fzf_lua_config.normalize_opts(fzf_opts, "jumps")
     if not fzf_opts then
@@ -97,7 +76,15 @@ function M.jumplist(fzf_opts)
     fzf_opts.actions = { ["enter"] = M.goto_jump }
     fzf_opts.previewer = M.previewer()
 
-    return require("fzf-lua.core").fzf_exec(text, fzf_opts)
+    return require("fzf-lua.core").fzf_exec(entries, fzf_opts)
+end
+
+function M.setup()
+    M.jumplist = M.jumplist
+
+    vim.api.nvim_create_user_command("FzfLuaJumplist", function()
+        M.jumplist()
+    end, {})
 end
 
 return M

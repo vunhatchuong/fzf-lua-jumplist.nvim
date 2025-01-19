@@ -1,1 +1,1 @@
----@class FzfLuaStorage entries { [string]: vim.fn.getjumplist.ret.item }
+---@class FzfLuaStorage entries table<string>
